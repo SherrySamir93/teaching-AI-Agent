@@ -1,9 +1,10 @@
+import json
 import os
+from pathlib import Path
 
 from dotenv import load_dotenv
+from langsmith import traceable
 from openai import OpenAI
-
-from prompt_templates import build_teaching_prompt
 
 
 load_dotenv()
@@ -15,58 +16,99 @@ if not api_key:
 
 client = OpenAI(api_key=api_key)
 
+MEMORY_FILE = Path("conversation_memory.json")
+MAX_MESSAGES = 20
 
-def ask_openai(prompt):
+SYSTEM_PROMPT = """
+You are a helpful teaching assistant.
+
+Instructions:
+- Explain concepts clearly and accurately.
+- Use simple language suitable for beginners.
+- Provide examples when useful.
+- Use the conversation history to understand follow-up questions.
+- If you are unsure, say so instead of inventing information.
+"""
+
+
+def load_memory():
+    if not MEMORY_FILE.exists():
+        return []
+
+    try:
+        with MEMORY_FILE.open("r", encoding="utf-8") as file:
+            return json.load(file)
+    except json.JSONDecodeError:
+        print("Invalid memory file. Starting a new conversation.")
+        return []
+
+
+def save_memory(history):
+    with MEMORY_FILE.open("w", encoding="utf-8") as file:
+        json.dump(history, file, indent=2, ensure_ascii=False)
+
+
+@traceable(
+    name="teaching_assistant_response",
+    project_name="MyTeachingAIAgent",
+    tags=["teaching-assistant", "openai"],
+)
+def get_answer(history):
     response = client.responses.create(
         model="gpt-4o-mini",
-        instructions=(
-            "Follow the supplied prompt carefully. "
-            "Do not add information that is not supported by the prompt."
-        ),
-        input=prompt,
-        max_output_tokens=500,
+        instructions=SYSTEM_PROMPT,
+        input=history,
+        max_output_tokens=300,
     )
 
     return response.output_text
 
 
-print("Structured prompt teaching assistant")
-print("Type 'exit' or 'quit' to stop.\n")
+conversation_history = load_memory()
+
+print("Teaching assistant started.")
+print("Commands: 'clear' to erase memory, 'exit' to quit.\n")
 
 while True:
-    topic = input("Topic: ").strip()
+    question = input("You: ").strip()
 
-    if topic.lower() in {"exit", "quit"}:
+    if question.lower() in {"exit", "quit"}:
         print("Goodbye!")
         break
 
-    if not topic:
-        print("Please enter a topic.\n")
+    if question.lower() == "clear":
+        conversation_history = []
+        save_memory(conversation_history)
+        print("Conversation memory cleared.\n")
         continue
 
-    audience = input("Audience [beginner]: ").strip() or "beginner"
-    max_words = input("Maximum words [250]: ").strip() or "250"
-    response_format = (
-        input("Response format [explanation and example]: ").strip()
-        or "Explanation followed by an example"
+    if not question:
+        print("Please enter a question.\n")
+        continue
+
+    conversation_history.append(
+        {
+            "role": "user",
+            "content": question,
+        }
     )
 
-    prompt = build_teaching_prompt(
-        topic=topic,
-        audience=audience,
-        max_words=max_words,
-        response_format=response_format,
-    )
+    conversation_history = conversation_history[-MAX_MESSAGES:]
 
     try:
-        answer = ask_openai(prompt)
+        answer = get_answer(conversation_history)
 
-        print("\nGenerated prompt:")
-        print(prompt)
+        print(f"\nAssistant: {answer}\n")
 
-        print("\nAssistant:")
-        print(answer)
-        print()
+        conversation_history.append(
+            {
+                "role": "assistant",
+                "content": answer,
+            }
+        )
+
+        conversation_history = conversation_history[-MAX_MESSAGES:]
+        save_memory(conversation_history)
 
     except Exception as error:
         print(f"\nAn error occurred: {error}\n")

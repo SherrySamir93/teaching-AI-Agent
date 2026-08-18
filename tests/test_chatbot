@@ -1,19 +1,70 @@
 import os
 
-from dotenv import load_dotenv
+import pytest
 from deepeval import assert_test
-from deepeval.metrics import AnswerRelevancyMetric
-from deepeval.test_case import LLMTestCase
+from deepeval.metrics import AnswerRelevancyMetric, GEval
+from deepeval.test_case import LLMTestCase, LLMTestCaseParams
+from dotenv import load_dotenv
+
 from main import ask_question
 
 
-def test_teaching_assistant_answer_relevancy():
-    question = "What is a Python virtual environment?"
-    chatbot_answer = ask_question(question)
+load_dotenv()
 
-    test_case = LLMTestCase(
+if not os.getenv("OPENAI_API_KEY"):
+    raise ValueError("OPENAI_API_KEY was not found in the .env file.")
+
+
+TEST_CASES = [
+    {
+        "question": "What is Python?",
+        "expected_answer": (
+            "Python is a high-level programming language used for tasks such as "
+            "automation, web development, data analysis, and machine learning."
+        ),
+    },
+    {
+        "question": "What is a Python virtual environment?",
+        "expected_answer": (
+            "A Python virtual environment is an isolated environment that allows "
+            "a project to use its own packages and dependencies."
+        ),
+    },
+    {
+        "question": "What is an API?",
+        "expected_answer": (
+            "An API is an interface that allows software applications to "
+            "communicate with each other."
+        ),
+    },
+    {
+        "question": "Why should API keys not be committed to Git?",
+        "expected_answer": (
+            "API keys should not be committed because anyone who obtains them "
+            "could potentially use the account and create unauthorized costs."
+        ),
+    },
+    {
+        "question": "What is machine learning?",
+        "expected_answer": (
+            "Machine learning is a method in which computers learn patterns "
+            "from data to make predictions or decisions."
+        ),
+    },
+]
+
+
+@pytest.mark.parametrize("test_case", TEST_CASES)
+def test_teaching_assistant(test_case):
+    question = test_case["question"]
+    expected_answer = test_case["expected_answer"]
+
+    actual_answer = ask_question(question)
+
+    test_case_data = LLMTestCase(
         input=question,
-        actual_output=chatbot_answer,
+        actual_output=actual_answer,
+        expected_output=expected_answer,
     )
 
     relevancy_metric = AnswerRelevancyMetric(
@@ -22,4 +73,24 @@ def test_teaching_assistant_answer_relevancy():
         include_reason=True,
     )
 
-    assert_test(test_case, [relevancy_metric])
+    correctness_metric = GEval(
+        name="Answer Correctness",
+        criteria=(
+            "Evaluate whether the actual answer is factually correct and "
+            "adequately addresses the question. Compare it with the expected "
+            "answer. Minor wording differences are acceptable."
+        ),
+        evaluation_params=[
+            LLMTestCaseParams.INPUT,
+            LLMTestCaseParams.ACTUAL_OUTPUT,
+            LLMTestCaseParams.EXPECTED_OUTPUT,
+        ],
+        threshold=0.7,
+        model="gpt-4o-mini",
+        include_reason=True,
+    )
+
+    assert_test(
+        test_case_data,
+        [relevancy_metric, correctness_metric],
+    )

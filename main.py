@@ -25,13 +25,18 @@ Instructions:
 - Explain concepts clearly and accurately.
 - Use simple language suitable for beginners.
 - Provide examples when useful.
-- Use the conversation history to understand follow-up questions.
+- Use conversation history to understand follow-up questions.
 - If you are unsure, say so instead of inventing information.
 """
 
+# Experiment with these values.
+MODEL = "gpt-4o-mini"
+TEMPERATURE = 0.3
+MAX_OUTPUT_TOKENS = 300
+TOP_P = 1.0
+
 
 def load_memory():
-    """Load saved conversation history."""
     if not MEMORY_FILE.exists():
         return []
 
@@ -39,22 +44,23 @@ def load_memory():
         with MEMORY_FILE.open("r", encoding="utf-8") as file:
             return json.load(file)
     except json.JSONDecodeError:
-        print("The memory file is invalid. Starting a new conversation.")
+        print("Invalid memory file. Starting a new conversation.")
         return []
 
 
 def save_memory(history):
-    """Save conversation history."""
     with MEMORY_FILE.open("w", encoding="utf-8") as file:
         json.dump(history, file, indent=2, ensure_ascii=False)
 
 
 def get_answer(history):
-    """Send the conversation to OpenAI and return the answer."""
     response = client.responses.create(
-        model="gpt-4o-mini",
+        model=MODEL,
         instructions=SYSTEM_PROMPT,
         input=history,
+        temperature=TEMPERATURE,
+        max_output_tokens=MAX_OUTPUT_TOKENS,
+        top_p=TOP_P,
     )
 
     return response.output_text
@@ -63,7 +69,7 @@ def get_answer(history):
 conversation_history = load_memory()
 
 print("Teaching assistant started.")
-print("Commands: 'clear' to erase memory, 'exit' to quit.\n")
+print("Commands: 'clear' to erase memory, 'settings' to show parameters, 'exit' to quit.\n")
 
 while True:
     question = input("You: ").strip()
@@ -78,6 +84,14 @@ while True:
         print("Conversation memory cleared.\n")
         continue
 
+    if question.lower() == "settings":
+        print("\nCurrent settings:")
+        print(f"Model: {MODEL}")
+        print(f"Temperature: {TEMPERATURE}")
+        print(f"Max output tokens: {MAX_OUTPUT_TOKENS}")
+        print(f"Top-p: {TOP_P}\n")
+        continue
+
     if not question:
         print("Please enter a question.\n")
         continue
@@ -89,7 +103,6 @@ while True:
         }
     )
 
-    # Keep only the latest messages to control token usage and cost.
     conversation_history = conversation_history[-MAX_MESSAGES:]
 
     try:

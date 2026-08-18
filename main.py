@@ -1,9 +1,9 @@
-import json
 import os
-from pathlib import Path
 
 from dotenv import load_dotenv
 from openai import OpenAI
+
+from prompt_templates import build_teaching_prompt
 
 
 load_dotenv()
@@ -15,104 +15,58 @@ if not api_key:
 
 client = OpenAI(api_key=api_key)
 
-MEMORY_FILE = Path("conversation_memory.json")
-MAX_MESSAGES = 20
 
-SYSTEM_PROMPT = """
-You are a helpful teaching assistant.
-
-Instructions:
-- Explain concepts clearly and accurately.
-- Use simple language suitable for beginners.
-- Provide examples when useful.
-- Use the conversation history to understand follow-up questions.
-- If you are unsure, say so instead of inventing information.
-"""
-
-
-def load_memory():
-    if not MEMORY_FILE.exists():
-        return []
-
-    try:
-        with MEMORY_FILE.open("r", encoding="utf-8") as file:
-            return json.load(file)
-    except json.JSONDecodeError:
-        print("Invalid memory file. Starting a new conversation.")
-        return []
-
-
-def save_memory(history):
-    with MEMORY_FILE.open("w", encoding="utf-8") as file:
-        json.dump(history, file, indent=2, ensure_ascii=False)
-
-
-def get_streaming_answer(history):
-    stream = client.responses.create(
+def ask_openai(prompt):
+    response = client.responses.create(
         model="gpt-4o-mini",
-        instructions=SYSTEM_PROMPT,
-        input=history,
-        stream=True,
-        max_output_tokens=300,
+        instructions=(
+            "Follow the supplied prompt carefully. "
+            "Do not add information that is not supported by the prompt."
+        ),
+        input=prompt,
+        max_output_tokens=500,
     )
 
-    answer_parts = []
-
-    print("\nAssistant: ", end="", flush=True)
-
-    for event in stream:
-        if event.type == "response.output_text.delta":
-            print(event.delta, end="", flush=True)
-            answer_parts.append(event.delta)
-
-    print("\n")
-
-    return "".join(answer_parts)
+    return response.output_text
 
 
-conversation_history = load_memory()
-
-print("Teaching assistant started.")
-print("Commands: 'clear' to erase memory, 'exit' to quit.\n")
+print("Structured prompt teaching assistant")
+print("Type 'exit' or 'quit' to stop.\n")
 
 while True:
-    question = input("You: ").strip()
+    topic = input("Topic: ").strip()
 
-    if question.lower() in {"exit", "quit"}:
+    if topic.lower() in {"exit", "quit"}:
         print("Goodbye!")
         break
 
-    if question.lower() == "clear":
-        conversation_history = []
-        save_memory(conversation_history)
-        print("Conversation memory cleared.\n")
+    if not topic:
+        print("Please enter a topic.\n")
         continue
 
-    if not question:
-        print("Please enter a question.\n")
-        continue
-
-    conversation_history.append(
-        {
-            "role": "user",
-            "content": question,
-        }
+    audience = input("Audience [beginner]: ").strip() or "beginner"
+    max_words = input("Maximum words [250]: ").strip() or "250"
+    response_format = (
+        input("Response format [explanation and example]: ").strip()
+        or "Explanation followed by an example"
     )
 
-    conversation_history = conversation_history[-MAX_MESSAGES:]
+    prompt = build_teaching_prompt(
+        topic=topic,
+        audience=audience,
+        max_words=max_words,
+        response_format=response_format,
+    )
 
     try:
-        answer = get_streaming_answer(conversation_history)
+        answer = ask_openai(prompt)
 
-        conversation_history.append(
-            {
-                "role": "assistant",
-                "content": answer,
-            }
-        )
+        print("\nGenerated prompt:")
+        print(prompt)
 
-        conversation_history = conversation_history[-MAX_MESSAGES:]
-        save_memory(conversation_history)
+        print("\nAssistant:")
+        print(answer)
+        print()
 
     except Exception as error:
         print(f"\nAn error occurred: {error}\n")

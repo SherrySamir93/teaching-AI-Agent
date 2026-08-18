@@ -1,5 +1,6 @@
 import json
 import os
+from pathlib import Path
 
 from dotenv import load_dotenv
 from openai import OpenAI
@@ -14,80 +15,104 @@ if not api_key:
 
 client = OpenAI(api_key=api_key)
 
-CATEGORIES = {
-    "technical": "Technical problems, errors, bugs, or product functionality",
-    "billing": "Invoices, payments, prices, refunds, or subscriptions",
-    "account": "Login, registration, permissions, or account settings",
-    "general": "Questions that do not fit the other categories",
-}
+MEMORY_FILE = Path("conversation_memory.json")
+MAX_MESSAGES = 20
 
+SYSTEM_PROMPT = """
+You are a helpful teaching assistant.
 
-def classify_text(text):
-    category_descriptions = "\n".join(
-        f"- {name}: {description}"
-        for name, description in CATEGORIES.items()
-    )
-
-    instructions = f"""
-You are a text classification assistant.
-
-Classify the user's text into exactly one of these categories:
-
-{category_descriptions}
-
-Return only valid JSON in this format:
-{{
-  "category": "technical",
-  "confidence": 0.95,
-  "reason": "Brief explanation"
-}}
-
-Rules:
-- The category must be exactly one of: {", ".join(CATEGORIES.keys())}.
-- The confidence must be a number between 0 and 1.
-- Do not include Markdown or additional text.
+Instructions:
+- Explain concepts clearly and accurately.
+- Use simple language suitable for beginners.
+- Provide examples when useful.
+- Use the conversation history to understand follow-up questions.
+- If you are unsure, say so instead of inventing information.
 """
 
-    response = client.responses.create(
-        model="gpt-4o-mini",
-        instructions=instructions,
-        input=text,
-    )
 
-    result_text = response.output_text.strip()
+def load_memory():
+    if not MEMORY_FILE.exists():
+        return []
 
     try:
-        result = json.loads(result_text)
+        with MEMORY_FILE.open("r", encoding="utf-8") as file:
+            return json.load(file)
     except json.JSONDecodeError:
-        raise ValueError(f"The model did not return valid JSON:\n{result_text}")
-
-    if result.get("category") not in CATEGORIES:
-        raise ValueError(f"Unexpected category: {result.get('category')}")
-
-    return result
+        print("Invalid memory file. Starting a new conversation.")
+        return []
 
 
-print("Text classifier started.")
-print("Type 'exit' or 'quit' to stop.\n")
+def save_memory(history):
+    with MEMORY_FILE.open("w", encoding="utf-8") as file:
+        json.dump(history, file, indent=2, ensure_ascii=False)
+
+
+def get_streaming_answer(history):
+    stream = client.responses.create(
+        model="gpt-4o-mini",
+        instructions=SYSTEM_PROMPT,
+        input=history,
+        stream=True,
+        max_output_tokens=300,
+    )
+
+    answer_parts = []
+
+    print("\nAssistant: ", end="", flush=True)
+
+    for event in stream:
+        if event.type == "response.output_text.delta":
+            print(event.delta, end="", flush=True)
+            answer_parts.append(event.delta)
+
+    print("\n")
+
+    return "".join(answer_parts)
+
+
+conversation_history = load_memory()
+
+print("Teaching assistant started.")
+print("Commands: 'clear' to erase memory, 'exit' to quit.\n")
 
 while True:
-    text = input("Enter text to classify: ").strip()
+    question = input("You: ").strip()
 
-    if text.lower() in {"exit", "quit"}:
+    if question.lower() in {"exit", "quit"}:
         print("Goodbye!")
         break
 
-    if not text:
-        print("Please enter some text.\n")
+    if question.lower() == "clear":
+        conversation_history = []
+        save_memory(conversation_history)
+        print("Conversation memory cleared.\n")
         continue
 
-    try:
-        classification = classify_text(text)
+    if not question:
+        print("Please enter a question.\n")
+        continue
 
-        print("\nClassification result:")
-        print(f"Category: {classification['category']}")
-        print(f"Confidence: {classification['confidence']}")
-        print(f"Reason: {classification['reason']}\n")
+    conversation_history.append(
+        {
+            "role": "user",
+            "content": question,
+        }
+    )
+
+    conversation_history = conversation_history[-MAX_MESSAGES:]
+
+    try:
+        answer = get_streaming_answer(conversation_history)
+
+        conversation_history.append(
+            {
+                "role": "assistant",
+                "content": answer,
+            }
+        )
+
+        conversation_history = conversation_history[-MAX_MESSAGES:]
+        save_memory(conversation_history)
 
     except Exception as error:
         print(f"\nAn error occurred: {error}\n")
